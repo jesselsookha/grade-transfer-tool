@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Grade Transfer Tool</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Coustard:wght@400;900&family=Fira+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+</head>
+<body>
+
+    <h1>Grade Transfer Tool</h1>
+
+    <div class="file-section">
+        <h2>CSV File (From LMS)</h2>
+        <input type="file" id="csvFileInput" accept=".csv">
+        <p id="csvFileName">No file selected</p>
+
+        <label for="csvStudentCol">Select Student Number Column:</label>
+        <select id="csvStudentCol"></select>
+
+        <label for="csvMarkCol">Select Marks Column:</label>
+        <select id="csvMarkCol"></select>
+    </div>
+
+    <div class="file-section">
+        <h2>Excel Template File</h2>
+        <input type="file" id="excelFileInput" accept=".xlsx">
+        <p id="excelFileName">No file selected</p>
+
+        <label for="excelStudentCol">Select Student Number Column:</label>
+        <select id="excelStudentCol"></select>
+
+        <label for="excelMarkDestCol">Select Destination Column for Marks:</label>
+        <select id="excelMarkDestCol"></select>
+    </div>
+
+    <button id="transferButton">TRANSFER MARKS</button>
+    <button id="downloadButton" disabled>Download Updated Excel</button>
+
+    <div id="logOutput"></div>
+
+    <script src="script2.js"></script>
+</body>
+</html>
