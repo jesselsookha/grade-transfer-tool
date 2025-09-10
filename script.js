@@ -39,6 +39,8 @@ function showLog(message, append = true) {
 
 function renderTable(containerId, dataArray, columns) {
     const container = document.getElementById(containerId);
+    if (!container) return;  // ⚠ Exit if container not found
+
     container.innerHTML = "";
 
     if (!dataArray || dataArray.length === 0 || !columns.length) return;
@@ -63,6 +65,7 @@ function renderTable(containerId, dataArray, columns) {
 
     container.appendChild(table);
 }
+
 
 // ====================
 // CSV PARSING
@@ -201,7 +204,7 @@ document.getElementById('downloadButton').addEventListener('click', function () 
     const dateStr = new Date().toISOString().split('T')[0];
     const customName = document.getElementById('customFilename').value.trim(); // ⭐ NEW
     const filename = customName
-        ? `${customName}.csv`
+        ? `${customName}_updated_${dateStr}.csv`
         : `${originalExcelFileName}_updated_${dateStr}.csv`;
 
     const link = document.createElement('a');
