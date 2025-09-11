@@ -1,193 +1,251 @@
-// ====== Global Variables ======
+// ====================
+// GLOBAL STATE
+// ====================
 let csvData = [];
+let csvHeaders = [];
+
 let excelData = [];
-let updatedCsvData = [];
+let excelHeaders = [];
+let workbookRef = null;
+let worksheetName = "";
 let originalExcelFileName = "";
+let rawExcelArray = []; // stores full Excel data row-by-row
 
-// ====== CSV File Handling ======
-document.getElementById('csvFileInput').addEventListener('change', (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    document.getElementById('csvFileName').textContent = file.name;
+function normalizeID(id) {
+    return id ? id.replace(/^#/, '').trim() : "";
+}
 
-    const reader = new FileReader();
-    reader.onload = function(event) {
-        const text = event.target.result;
-        csvData = parseCSV(text);
-        populateColumns('csvStudentCol', csvData);
-        populateColumns('csvMarkCol', csvData);
-        log("CSV file loaded. Select columns for student number and marks.");
-    };
-    reader.readAsText(file);
-});
-
-// ====== Excel File Handling ======
-document.getElementById('excelFileInput').addEventListener('change', (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    document.getElementById('excelFileName').textContent = file.name;
-    originalExcelFileName = file.name.split('.').slice(0, -1).join('.'); // Remove extension
-
-    const reader = new FileReader();
-    reader.onload = function(event) {
-        const data = new Uint8Array(event.target.result);
-        const workbook = XLSX.read(data, { type: 'array' });
-        const sheetName = workbook.SheetNames[0];
-        const sheet = workbook.Sheets[sheetName];
-        excelData = XLSX.utils.sheet_to_json(sheet, { header: 1 }); // 2D array
-
-        // Populate columns with headers or fallback
-        populateColumns('excelStudentCol', excelData);
-        populateColumns('excelMarkDestCol', excelData);
-        log("Excel template loaded. Select student and destination columns.");
-    };
-    reader.readAsArrayBuffer(file);
-});
-
-// ====== Populate Column Dropdown ======
-function populateColumns(selectId, data) {
-    const select = document.getElementById(selectId);
-    select.innerHTML = "";
-    if (!data || data.length === 0) return;
-
-    // Use first row as headers if present, otherwise fallback to Column 1, 2, ...
-    const headers = data[0].map((colName, idx) => {
-        return colName && colName.toString().trim() !== "" ? colName : `Column ${idx + 1}`;
-    });
-
-    headers.forEach((colName, idx) => {
+function populateDropdown(id, headers) {
+    const select = document.getElementById(id);
+    select.innerHTML = '';
+    headers.forEach(header => {
         const option = document.createElement('option');
-        option.value = idx;
-        option.text = colName;
+        option.value = header;
+        option.textContent = header;
         select.appendChild(option);
     });
 }
 
-// ====== Parse CSV ======
-function parseCSV(text) {
-    const lines = text.split(/\r?\n/);
-    return lines.map(line => line.split(','));
-}
-
-// ====== Transfer Marks ======
-function transferMarks() {
-    if (!csvData.length || !excelData.length) {
-        log("Please load both CSV and Excel files.");
-        return;
+function showLog(message, append = true) {
+    const logDiv = document.getElementById('logOutput');
+    const time = new Date().toLocaleTimeString();
+    const entry = `[${time}] ${message}\n`;
+    if (append) {
+        logDiv.textContent += entry;
+    } else {
+        logDiv.textContent = entry;
     }
-
-    const csvStudentCol = parseInt(document.getElementById('csvStudentCol').value);
-    const csvMarkCol = parseInt(document.getElementById('csvMarkCol').value);
-    const excelStudentCol = parseInt(document.getElementById('excelStudentCol').value);
-    const excelMarkDestCol = parseInt(document.getElementById('excelMarkDestCol').value);
-    const iceTask = document.getElementById('iceTaskCheckbox').checked;
-
-    // Clone Excel data for updated output
-    updatedCsvData = excelData.map(row => [...row]);
-
-    // Create a map of student -> mark from CSV
-    const csvMap = {};
-    csvData.forEach(row => {
-        const student = row[csvStudentCol];
-        const mark = row[csvMarkCol];
-        if (student) csvMap[student] = mark;
-    });
-
-    // Transfer marks into Excel
-    updatedCsvData.forEach((row, idx) => {
-        if (idx === 0) return; // Skip header
-        const studentId = row[excelStudentCol];
-        if (!studentId) return;
-
-        if (iceTask) {
-            // ICE Task logic: 100 if student exists, else 0
-            row[excelMarkDestCol] = csvMap.hasOwnProperty(studentId) ? 100 : 0;
-        } else {
-            row[excelMarkDestCol] = csvMap[studentId] || "";
-        }
-    });
-
-    log("Marks transferred. You can now download the updated CSV.");
-    renderTable('logOutput', updatedCsvData, updatedCsvData[0]);
-    document.getElementById('downloadButton').disabled = false;
 }
 
-// ====== Render Preview Table ======
 function renderTable(containerId, dataArray, columns) {
     const container = document.getElementById(containerId);
-    if (!container) return; // Extra precaution
+    if (!container) return;  // ⚠ Exit if container not found
+
     container.innerHTML = "";
 
-    if (!dataArray || dataArray.length === 0) return;
+    if (!dataArray || dataArray.length === 0 || !columns.length) return;
 
     const table = document.createElement('table');
-
-    // Header row
-    const headerRow = document.createElement('tr');
+    const thead = table.createTHead();
+    const row = thead.insertRow();
     columns.forEach(col => {
         const th = document.createElement('th');
         th.textContent = col;
-        headerRow.appendChild(th);
+        row.appendChild(th);
     });
-    table.appendChild(headerRow);
 
-    // Data rows
-    dataArray.slice(1).forEach(row => {
-        const tr = document.createElement('tr');
-        row.forEach(cell => {
-            const td = document.createElement('td');
-            td.textContent = cell !== undefined ? cell : "";
-            tr.appendChild(td);
+    const tbody = table.createTBody();
+    dataArray.forEach(item => {
+        const tr = tbody.insertRow();
+        columns.forEach(col => {
+            const td = tr.insertCell();
+            td.textContent = item[col] ?? '';
         });
-        table.appendChild(tr);
     });
 
     container.appendChild(table);
 }
 
-// ====== Download CSV ======
-document.getElementById('downloadButton').addEventListener('click', () => {
-    if (!updatedCsvData || updatedCsvData.length === 0) return;
+
+// ====================
+// CSV PARSING
+// ====================
+document.getElementById('csvFileInput').addEventListener('change', function (e) {
+    const file = e.target.files[0];
+    document.getElementById('csvFileName').textContent = file ? file.name : 'No file selected';
+
+    const reader = new FileReader();
+    reader.onload = function (event) {
+        const lines = event.target.result.split('\n').filter(l => l.trim() !== "");
+        csvHeaders = lines[0].split(',').map(h => h.trim());
+
+        csvData = lines.slice(1).map(row => {
+            const values = row.split(',').map(v => v.trim());
+            return csvHeaders.reduce((obj, header, i) => {
+                obj[header] = values[i];
+                return obj;
+            }, {});
+        });
+
+        populateDropdown('csvStudentCol', csvHeaders);
+        populateDropdown('csvMarkCol', csvHeaders);
+        renderTable("csvPreview", csvData, csvHeaders.slice(0, 2));
+    };
+
+    reader.readAsText(file);
+});
+
+// ====================
+// EXCEL PARSING
+// ====================
+document.getElementById('excelFileInput').addEventListener('change', function (e) {
+    const file = e.target.files[0];
+    originalExcelFileName = file.name.replace(/\.xlsx$/, '');
+    document.getElementById('excelFileName').textContent = file ? file.name : 'No file selected';
+
+    const reader = new FileReader();
+    reader.onload = function (event) {
+        const data = new Uint8Array(event.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        workbookRef = workbook;
+        worksheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[worksheetName];
+
+        rawExcelArray = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+        // Row 2 = headers
+        excelHeaders = rawExcelArray[1];
+
+        // Slice from row 3 onwards = data
+        excelData = rawExcelArray.slice(2).map(row => {
+            let obj = {};
+            excelHeaders.forEach((header, i) => {
+                obj[header] = row[i];
+            });
+            return obj;
+        });
+
+        populateDropdown('excelStudentCol', excelHeaders);
+        populateDropdown('excelMarkDestCol', excelHeaders);
+        renderTable("excelPreview", excelData, excelHeaders.slice(0, 2));
+    };
+
+    reader.readAsArrayBuffer(file);
+});
+
+// ====================
+// TRANSFER MARKS
+// ====================
+document.getElementById('transferButton').addEventListener('click', function () {
+    const csvSN = document.getElementById('csvStudentCol').value;
+    const csvMark = document.getElementById('csvMarkCol').value;
+    const excelSN = document.getElementById('excelStudentCol').value;
+    const excelDest = document.getElementById('excelMarkDestCol').value;
+    const iceMode = document.getElementById('iceCheckbox').checked; // ⭐ NEW: ICE mode toggle
+
+    if (!csvSN || !csvMark || !excelSN || !excelDest) {
+        alert("Please select all column options.");
+        return;
+    }
+
+    let transferCount = 0;
+    const csvMap = {};
+    csvData.forEach(row => {
+        const id = normalizeID(row[csvSN]);
+        if (id) csvMap[id] = row[csvMark];
+    });
+
+    showLog("Starting mark transfer...", true);
+
+    excelData.forEach(row => {
+        const id = normalizeID(row[excelSN]);
+        if (id in csvMap) {
+            let mark = csvMap[id];
+
+            if (iceMode) {
+                // ⭐ NEW: ICE task rule → any value = 100, missing = 0
+                row[excelDest] = mark && mark.trim() !== "" ? "100" : "0";
+                showLog(`✔ ICE Task for ${id}: ${row[excelDest]}`);
+            } else {
+                // normal mark transfer
+                if (mark !== undefined && mark !== "") {
+                    row[excelDest] = mark;
+                    showLog(`✔ Mark for ${id}: ${mark}`);
+                } else {
+                    row[excelDest] = "0";
+                    showLog(`⚠ No mark for ${id}, assigning 0`);
+                }
+            }
+            transferCount++;
+        } else {
+            row[excelDest] = "0";
+            showLog(`⚠ ${id} not found in CSV, assigning 0`);
+        }
+    });
+
+    showLog(`✅ Transferred marks for ${transferCount} student(s).`);
+    document.getElementById('downloadButton').disabled = false;
+
+    renderTable("resultPreview", excelData, [excelSN, excelDest]);
+});
+
+// ====================
+// DOWNLOAD NEW CSV (⭐ NEW)
+// ====================
+document.getElementById('downloadButton').addEventListener('click', function () {
+    if (!excelData.length) return;
+
+    // reassemble data
+    const rows = [excelHeaders, ...excelData.map(row => excelHeaders.map(h => row[h] ?? ""))];
+    const csvContent = rows.map(r => r.map(v => `"${v}"`).join(",")).join("\n");
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
 
     const dateStr = new Date().toISOString().split('T')[0];
-    const customName = document.getElementById('customFilename').value.trim();
+    const customName = document.getElementById('customFilename').value.trim(); // ⭐ NEW
     const filename = customName
         ? `${customName}_updated_${dateStr}.csv`
         : `${originalExcelFileName}_updated_${dateStr}.csv`;
 
-    const csvContent = updatedCsvData.map(row => row.join(',')).join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement("a");
+    const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.setAttribute('download', filename);
+    link.download = filename;
+    document.body.appendChild(link);
     link.click();
-    log(`Downloaded CSV: ${filename}`);
+    document.body.removeChild(link);
 });
 
-// ====== Transfer Button ======
-document.getElementById('transferButton').addEventListener('click', transferMarks);
-
-// ====== Reset ======
-document.getElementById('resetButton').addEventListener('click', () => {
+// ====================
+// RESET BUTTON
+// ====================
+document.getElementById('resetButton').addEventListener('click', function () {
     csvData = [];
+    csvHeaders = [];
     excelData = [];
-    updatedCsvData = [];
+    excelHeaders = [];
+    rawExcelArray = [];
+    workbookRef = null;
+    worksheetName = "";
     originalExcelFileName = "";
 
     document.getElementById('csvFileInput').value = "";
     document.getElementById('excelFileInput').value = "";
-    document.getElementById('csvStudentCol').innerHTML = "";
-    document.getElementById('csvMarkCol').innerHTML = "";
-    document.getElementById('excelStudentCol').innerHTML = "";
-    document.getElementById('excelMarkDestCol').innerHTML = "";
-    document.getElementById('customFilename').value = "";
-    document.getElementById('downloadButton').disabled = true;
-    document.getElementById('logOutput').innerHTML = "";
-});
+    document.getElementById('csvFileName').textContent = "No file selected";
+    document.getElementById('excelFileName').textContent = "No file selected";
+    document.getElementById('customFilename').value = ""; // ⭐ NEW reset custom filename
+    document.getElementById('iceCheckbox').checked = false; // ⭐ NEW reset ICE mode
 
-// ====== Logging ======
-function log(message) {
-    const logDiv = document.getElementById('logOutput');
-    logDiv.textContent += message + "\n";
-    logDiv.scrollTop = logDiv.scrollHeight;
-}
+    ['csvStudentCol', 'csvMarkCol', 'excelStudentCol', 'excelMarkDestCol'].forEach(id => {
+        const select = document.getElementById(id);
+        select.innerHTML = "";
+    });
+
+    ['csvPreview', 'excelPreview', 'resultPreview'].forEach(id => {
+        document.getElementById(id).innerHTML = "";
+    });
+
+    document.getElementById('logOutput').textContent = "";
+    document.getElementById('downloadButton').disabled = true;
+
+    showLog("🔄 Tool reset. Ready for a new transfer.", false);
+});
