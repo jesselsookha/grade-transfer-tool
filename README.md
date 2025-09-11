@@ -34,11 +34,14 @@ The process is entirely browser-based: no installation, no external dependencies
 
 ## 📸 Screenshots
 
-*(Screenshots to be added after final UI polish)*
+![Step 1: Upload files](screenshots/upload-files.png)  
+  _Upload files by selecting within these sections_
 
-- ![Step 1: Upload files](screenshots/upload-files.png)
-- ![Step 2: Column mapping](screenshots/column-mapping.png)
-- ![Step 3: Preview & Download](screenshots/preview-download.png)
+![Step 2: Column mapping](screenshots/column-mapping.png)  
+  _Select the key columns for Student Number* and the column containing the marks to be transferred_
+
+![Step 3: Preview & Download](screenshots/preview-download.png)  
+  _Once columns have been selected you may begin the transfer - preview the content passed and download_
 
 ---
 
