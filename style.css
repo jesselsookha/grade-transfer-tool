@@ -135,3 +135,11 @@ input[type="text"]#customFilename {
     background-color: #f9f9f9;
     box-sizing: border-box;
 }
+
+.info-text {
+    font-size: 0.9rem;
+    color: #555;
+    margin-top: 6px;
+    font-style: italic;
+}
+

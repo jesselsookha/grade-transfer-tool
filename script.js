@@ -1,251 +1,366 @@
 // ====================
-// GLOBAL STATE
+// Grade Transfer Tool - script.js
 // ====================
-let csvData = [];
-let csvHeaders = [];
+//
+// - Matches current HTML element IDs
+// - Shows small previews (10 rows) for selected columns
+// - Detects CSV delimiter and shows it in csvInfo
+// - ICE-Task logic (100 if attempted, 0 if not) optional
+// - Download updated file as CSV with _updated_[YYYY-MM-DD].csv
+//
+// NOTE: This implementation uses simple CSV splitting (no external CSV library).
+//       It is robust for typical LMS exports that use comma or semicolon delimiters.
+// ====================
 
-let excelData = [];
-let excelHeaders = [];
-let workbookRef = null;
-let worksheetName = "";
+// ---------- Global state ----------
+let csvData = [];         // array of objects keyed by csvHeaders
+let csvHeaders = [];      // array of header names (CSV row 1)
+let rawCsvRows = [];      // raw 2D array of CSV (for counts or other checks)
+
+let rawExcelArray = [];   // full 2D array from XLSX (preserves row1, row2, etc.)
+let excelHeaders = [];    // headers from row 2
+let excelData = [];       // array of objects for rows (from row3 onwards)
 let originalExcelFileName = "";
-let rawExcelArray = []; // stores full Excel data row-by-row
 
+// ---------- Utility helpers ----------
 function normalizeID(id) {
-    return id ? id.replace(/^#/, '').trim() : "";
+    return id ? id.toString().replace(/^#/, '').trim() : "";
 }
 
+// safe DOM getter
+function el(id) { return document.getElementById(id); }
+
+// append log entry with timestamp
+function showLog(message, append = true) {
+    const logDiv = el('logOutput');
+    if (!logDiv) return;
+    const time = new Date().toLocaleTimeString();
+    const entry = `[${time}] ${message}\n`;
+    if (append) logDiv.textContent += entry;
+    else logDiv.textContent = entry;
+    logDiv.scrollTop = logDiv.scrollHeight;
+}
+
+// ---------- CSV: detect delimiter + parse ----------
+function detectDelimiter(sampleText) {
+    // look at first few lines
+    const lines = sampleText.split(/\r?\n/).slice(0, 8).filter(l => l.trim() !== '');
+    let commaCount = 0, semiCount = 0;
+    lines.forEach(l => {
+        commaCount += (l.match(/,/g) || []).length;
+        semiCount += (l.match(/;/g) || []).length;
+    });
+    return semiCount > commaCount ? ';' : ',';
+}
+
+function parseCsvText(text, delimiter) {
+    // produce raw 2D array
+    const rows = text.split(/\r?\n/).filter(r => r.trim() !== '').map(r => r.split(delimiter));
+    return rows;
+}
+
+// convert raw CSV rows (2D) + header row -> array of objects
+function rowsToObjects(rows) {
+    if (!rows || rows.length === 0) return [];
+    const headers = rows[0].map(h => h ? h.toString().trim() : '');
+    const data = rows.slice(1).map(r => {
+        const obj = {};
+        headers.forEach((h, i) => { obj[h] = r[i] !== undefined ? r[i].toString().trim() : ''; });
+        return obj;
+    });
+    return { headers, data };
+}
+
+// ---------- Populate dropdown helper ----------
 function populateDropdown(id, headers) {
-    const select = document.getElementById(id);
+    const select = el(id);
+    if (!select) return;
     select.innerHTML = '';
-    headers.forEach(header => {
-        const option = document.createElement('option');
-        option.value = header;
-        option.textContent = header;
-        select.appendChild(option);
+    headers.forEach(h => {
+        const opt = document.createElement('option');
+        opt.value = h;
+        opt.textContent = h;
+        select.appendChild(opt);
     });
 }
 
-function showLog(message, append = true) {
-    const logDiv = document.getElementById('logOutput');
-    const time = new Date().toLocaleTimeString();
-    const entry = `[${time}] ${message}\n`;
-    if (append) {
-        logDiv.textContent += entry;
-    } else {
-        logDiv.textContent = entry;
+// ---------- Small preview rendering (10 rows) ----------
+function showPreview(type) {
+    // type: 'csv', 'excel', or 'result'
+    const previewDiv = el(type === 'csv' ? 'csvPreview' : (type === 'excel' ? 'excelPreview' : 'resultPreview'));
+    const infoEl = el(type === 'csv' ? 'csvInfo' : (type === 'excel' ? 'excelInfo' : 'resultInfo'));
+    if (!previewDiv) return;
+    previewDiv.innerHTML = '';
+    if (infoEl) infoEl.textContent = '';
+
+    if (type === 'csv') {
+        if (!csvData.length) {
+            previewDiv.textContent = 'Upload CSV and select columns to preview.';
+            return;
+        }
+        const studentCol = el('csvStudentCol')?.value;
+        const markCol = el('csvMarkCol')?.value;
+        if (!studentCol || !markCol) {
+            previewDiv.textContent = 'Select Student and Mark columns to preview CSV.';
+            return;
+        }
+        // show header + up to 10 rows
+        const headerRow = [studentCol, markCol];
+        const rows = csvData.slice(0, 10).map(obj => [obj[studentCol] ?? '', obj[markCol] ?? '']);
+        renderPreviewTable(previewDiv, headerRow, rows);
+        if (infoEl) infoEl.textContent = `Showing ${Math.min(10, csvData.length)} of ${csvData.length} students`;
+    } else if (type === 'excel') {
+        if (!excelData.length) {
+            previewDiv.textContent = 'Upload Excel template and select columns to preview.';
+            return;
+        }
+        const studentCol = el('excelStudentCol')?.value;
+        const markCol = el('excelMarkDestCol')?.value;
+        if (!studentCol || !markCol) {
+            previewDiv.textContent = 'Select Student and Destination columns to preview Excel.';
+            return;
+        }
+        const headerRow = [studentCol, markCol];
+        const rows = excelData.slice(0, 10).map(obj => [obj[studentCol] ?? '', obj[markCol] ?? '']);
+        renderPreviewTable(previewDiv, headerRow, rows);
+        if (infoEl) infoEl.textContent = `Showing ${Math.min(10, excelData.length)} of ${excelData.length} students`;
+    } else if (type === 'result') {
+        if (!excelData.length) {
+            previewDiv.textContent = 'No results to preview yet. Click Transfer first.';
+            return;
+        }
+        const studentCol = el('excelStudentCol')?.value;
+        const markCol = el('excelMarkDestCol')?.value;
+        if (!studentCol || !markCol) {
+            previewDiv.textContent = 'Select Student and Destination columns to preview results.';
+            return;
+        }
+        const headerRow = [studentCol, markCol];
+        const rows = excelData.slice(0, 10).map(obj => [obj[studentCol] ?? '', obj[markCol] ?? '']);
+        renderPreviewTable(previewDiv, headerRow, rows);
+        if (infoEl) infoEl.textContent = `Showing ${Math.min(10, excelData.length)} of ${excelData.length} students (result preview)`;
     }
 }
 
-function renderTable(containerId, dataArray, columns) {
-    const container = document.getElementById(containerId);
-    if (!container) return;  // ⚠ Exit if container not found
-
-    container.innerHTML = "";
-
-    if (!dataArray || dataArray.length === 0 || !columns.length) return;
-
+function renderPreviewTable(container, headerRow, rows) {
+    container.innerHTML = '';
     const table = document.createElement('table');
-    const thead = table.createTHead();
-    const row = thead.insertRow();
-    columns.forEach(col => {
-        const th = document.createElement('th');
-        th.textContent = col;
-        row.appendChild(th);
+    const thead = document.createElement('thead');
+    const trh = document.createElement('tr');
+    headerRow.forEach(h => { const th = document.createElement('th'); th.textContent = h; trh.appendChild(th); });
+    thead.appendChild(trh);
+    table.appendChild(thead);
+    const tbody = document.createElement('tbody');
+    rows.forEach(r => {
+        const tr = document.createElement('tr');
+        r.forEach(c => { const td = document.createElement('td'); td.textContent = c; tr.appendChild(td); });
+        tbody.appendChild(tr);
     });
-
-    const tbody = table.createTBody();
-    dataArray.forEach(item => {
-        const tr = tbody.insertRow();
-        columns.forEach(col => {
-            const td = tr.insertCell();
-            td.textContent = item[col] ?? '';
-        });
-    });
-
+    table.appendChild(tbody);
     container.appendChild(table);
 }
 
-
-// ====================
-// CSV PARSING
-// ====================
-document.getElementById('csvFileInput').addEventListener('change', function (e) {
-    const file = e.target.files[0];
-    document.getElementById('csvFileName').textContent = file ? file.name : 'No file selected';
+// ---------- Event handlers for file inputs ----------
+el('csvFileInput')?.addEventListener('change', (ev) => {
+    const file = ev.target.files[0];
+    if (!file) return;
+    el('csvFileName') && (el('csvFileName').textContent = file.name);
 
     const reader = new FileReader();
-    reader.onload = function (event) {
-        const lines = event.target.result.split('\n').filter(l => l.trim() !== "");
-        csvHeaders = lines[0].split(',').map(h => h.trim());
+    reader.onload = (e) => {
+        const text = e.target.result;
+        const delimiter = detectDelimiter(text); // ',' or ';'
+        el('csvInfo') && (el('csvInfo').textContent = `Detected delimiter: "${delimiter}"`);
 
-        csvData = lines.slice(1).map(row => {
-            const values = row.split(',').map(v => v.trim());
-            return csvHeaders.reduce((obj, header, i) => {
-                obj[header] = values[i];
-                return obj;
-            }, {});
-        });
+        // parse rows and convert to objects
+        rawCsvRows = parseCsvText(text, delimiter);
+        const { headers, data } = rowsToObjects(rawCsvRows);
+        csvHeaders = headers;
+        csvData = data;
 
+        // populate dropdowns and attach change listeners to update preview
         populateDropdown('csvStudentCol', csvHeaders);
         populateDropdown('csvMarkCol', csvHeaders);
-        renderTable("csvPreview", csvData, csvHeaders.slice(0, 2));
-    };
+        // update preview when user changes selection
+        el('csvStudentCol')?.addEventListener('change', () => showPreview('csv'));
+        el('csvMarkCol')?.addEventListener('change', () => showPreview('csv'));
 
+        // initial preview if both selects exist & have default values
+        showPreview('csv');
+
+        showLog(`CSV loaded (${csvData.length} rows) — delimiter "${delimiter}".`);
+    };
     reader.readAsText(file);
 });
 
-// ====================
-// EXCEL PARSING
-// ====================
-document.getElementById('excelFileInput').addEventListener('change', function (e) {
-    const file = e.target.files[0];
-    originalExcelFileName = file.name.replace(/\.xlsx$/, '');
-    document.getElementById('excelFileName').textContent = file ? file.name : 'No file selected';
+el('excelFileInput')?.addEventListener('change', (ev) => {
+    const file = ev.target.files[0];
+    if (!file) return;
+    el('excelFileName') && (el('excelFileName').textContent = file.name);
+    originalExcelFileName = file.name.replace(/\.[^/.]+$/, '');
 
     const reader = new FileReader();
-    reader.onload = function (event) {
-        const data = new Uint8Array(event.target.result);
+    reader.onload = (e) => {
+        const data = new Uint8Array(e.target.result);
         const workbook = XLSX.read(data, { type: 'array' });
-        workbookRef = workbook;
-        worksheetName = workbook.SheetNames[0];
-        const sheet = workbook.Sheets[worksheetName];
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
 
+        // Keep entire sheet as 2D array so row1 (maybe metadata) and row2 headers are preserved
         rawExcelArray = XLSX.utils.sheet_to_json(sheet, { header: 1 });
 
-        // Row 2 = headers
-        excelHeaders = rawExcelArray[1];
-
-        // Slice from row 3 onwards = data
-        excelData = rawExcelArray.slice(2).map(row => {
-            let obj = {};
-            excelHeaders.forEach((header, i) => {
-                obj[header] = row[i];
-            });
+        // Row 2 (index 1) contains the headers in Serosoft template
+        excelHeaders = rawExcelArray[1] || [];
+        // Data rows start from index 2
+        excelData = rawExcelArray.slice(2).map(r => {
+            const obj = {};
+            excelHeaders.forEach((h, i) => { obj[h] = r[i] !== undefined ? r[i] : ''; });
             return obj;
         });
 
         populateDropdown('excelStudentCol', excelHeaders);
         populateDropdown('excelMarkDestCol', excelHeaders);
-        renderTable("excelPreview", excelData, excelHeaders.slice(0, 2));
-    };
+        el('excelStudentCol')?.addEventListener('change', () => showPreview('excel'));
+        el('excelMarkDestCol')?.addEventListener('change', () => showPreview('excel'));
 
+        showPreview('excel');
+        showLog(`Excel template loaded (${excelData.length} data rows). Headers detected: ${excelHeaders.join(', ')}`);
+    };
     reader.readAsArrayBuffer(file);
 });
 
-// ====================
-// TRANSFER MARKS
-// ====================
-document.getElementById('transferButton').addEventListener('click', function () {
-    const csvSN = document.getElementById('csvStudentCol').value;
-    const csvMark = document.getElementById('csvMarkCol').value;
-    const excelSN = document.getElementById('excelStudentCol').value;
-    const excelDest = document.getElementById('excelMarkDestCol').value;
-    const iceMode = document.getElementById('iceCheckbox').checked; // ⭐ NEW: ICE mode toggle
+// ---------- Transfer marks ----------
+el('transferButton')?.addEventListener('click', () => {
+    if (!csvData.length) { alert('Please upload CSV file and select columns.'); return; }
+    if (!excelData.length) { alert('Please upload Excel template and select columns.'); return; }
+
+    const csvSN = el('csvStudentCol')?.value;
+    const csvMark = el('csvMarkCol')?.value;
+    const excelSN = el('excelStudentCol')?.value;
+    const excelDest = el('excelMarkDestCol')?.value;
+    const iceMode = el('iceCheckbox')?.checked;
 
     if (!csvSN || !csvMark || !excelSN || !excelDest) {
-        alert("Please select all column options.");
+        alert('Please select all four columns (CSV student, CSV mark, Excel student, Excel destination).');
         return;
     }
 
-    let transferCount = 0;
+    // Build CSV lookup map (student -> mark)
     const csvMap = {};
-    csvData.forEach(row => {
-        const id = normalizeID(row[csvSN]);
-        if (id) csvMap[id] = row[csvMark];
+    csvData.forEach(r => {
+        const id = normalizeID(r[csvSN]);
+        if (id) csvMap[id] = r[csvMark]; // may be empty string
     });
 
-    showLog("Starting mark transfer...", true);
-
+    // Transfer into excelData (objects)
+    let transferCount = 0;
     excelData.forEach(row => {
         const id = normalizeID(row[excelSN]);
-        if (id in csvMap) {
-            let mark = csvMap[id];
+        if (!id) { row[excelDest] = row[excelDest] ?? ''; return; }
 
+        if (Object.prototype.hasOwnProperty.call(csvMap, id)) {
+            const rawMark = csvMap[id];
             if (iceMode) {
-                // ⭐ NEW: ICE task rule → any value = 100, missing = 0
-                row[excelDest] = mark && mark.trim() !== "" ? "100" : "0";
-                showLog(`✔ ICE Task for ${id}: ${row[excelDest]}`);
+                // ICE: any non-empty mark → 100, else 0
+                row[excelDest] = (rawMark !== undefined && rawMark !== null && String(rawMark).trim() !== '') ? '100' : '0';
             } else {
-                // normal mark transfer
-                if (mark !== undefined && mark !== "") {
-                    row[excelDest] = mark;
-                    showLog(`✔ Mark for ${id}: ${mark}`);
-                } else {
-                    row[excelDest] = "0";
-                    showLog(`⚠ No mark for ${id}, assigning 0`);
-                }
+                // Normal transfer, but empty → 0
+                row[excelDest] = (rawMark !== undefined && String(rawMark).trim() !== '') ? rawMark : '0';
             }
             transferCount++;
+            showLog(`Transferred ${id} → ${row[excelDest]}`);
         } else {
-            row[excelDest] = "0";
-            showLog(`⚠ ${id} not found in CSV, assigning 0`);
+            // Not found in CSV → set 0
+            row[excelDest] = '0';
+            showLog(`No CSV entry for ${id}; set ${excelDest}=0`);
         }
     });
 
-    showLog(`✅ Transferred marks for ${transferCount} student(s).`);
-    document.getElementById('downloadButton').disabled = false;
+    showLog(`✅ Transfer complete — ${transferCount} students updated.`, true);
 
-    renderTable("resultPreview", excelData, [excelSN, excelDest]);
+    // Update result preview
+    showPreview('result');
+
+    // Enable download
+    if (el('downloadButton')) el('downloadButton').disabled = false;
 });
 
-// ====================
-// DOWNLOAD NEW CSV (⭐ NEW)
-// ====================
-document.getElementById('downloadButton').addEventListener('click', function () {
-    if (!excelData.length) return;
+// ---------- Download updated CSV (from preserved rawExcelArray) ----------
+el('downloadButton')?.addEventListener('click', () => {
+    if (!rawExcelArray || rawExcelArray.length === 0) { alert('No data to download.'); return; }
 
-    // reassemble data
-    const rows = [excelHeaders, ...excelData.map(row => excelHeaders.map(h => row[h] ?? ""))];
-    const csvContent = rows.map(r => r.map(v => `"${v}"`).join(",")).join("\n");
+    // Update rawExcelArray rows (row index 2 onwards) with excelData objects
+    for (let i = 0; i < excelData.length; i++) {
+        const rowObj = excelData[i];
+        excelHeaders.forEach((h, colIndex) => {
+            // ensure the underlying row array exists
+            rawExcelArray[i + 2] = rawExcelArray[i + 2] || [];
+            rawExcelArray[i + 2][colIndex] = rowObj[h] ?? '';
+        });
+    }
 
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    // Build CSV text from rawExcelArray. Escape quotes by doubling.
+    function csvEscapeCell(cell) {
+        const s = cell === undefined || cell === null ? '' : String(cell);
+        // If contains comma, semicolon, quote or newlines, wrap in quotes and escape quotes
+        if (/[,"\r\n;]/.test(s)) {
+            return '"' + s.replace(/"/g, '""') + '"';
+        }
+        return s;
+    }
 
-    const dateStr = new Date().toISOString().split('T')[0];
-    const customName = document.getElementById('customFilename').value.trim(); // ⭐ NEW
-    const filename = customName
-        ? `${customName}_updated_${dateStr}.csv`
-        : `${originalExcelFileName}_updated_${dateStr}.csv`;
+    const csvLines = rawExcelArray.map(row => {
+        // If row is undefined (possible), output empty line
+        if (!row) return '';
+        // ensure we map through the full length (some rows may be shorter)
+        const maxCols = row.length;
+        return row.map((c) => csvEscapeCell(c)).join(',');
+    });
 
+    const csvText = csvLines.join('\r\n');
+
+    // Filename handling: custom name or originalExcelFileName, always append _updated_YYYY-MM-DD
+    const rawCustom = el('customFilename') ? el('customFilename').value.trim() : '';
+    let baseName = rawCustom !== '' ? rawCustom.replace(/\.csv$/i, '') : (originalExcelFileName || 'updated_file');
+    const dateStr = new Date().toISOString().slice(0,10); // YYYY-MM-DD
+    const filename = `${baseName}_updated_${dateStr}.csv`;
+
+    // Trigger download
+    const blob = new Blob([csvText], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
     link.download = filename;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+
+    showLog(`Downloaded file: ${filename}`);
 });
 
-// ====================
-// RESET BUTTON
-// ====================
-document.getElementById('resetButton').addEventListener('click', function () {
-    csvData = [];
-    csvHeaders = [];
-    excelData = [];
-    excelHeaders = [];
-    rawExcelArray = [];
-    workbookRef = null;
-    worksheetName = "";
-    originalExcelFileName = "";
+// ---------- Reset ----------
+el('resetButton')?.addEventListener('click', () => {
+    // reset in-memory
+    csvData = []; csvHeaders = []; rawCsvRows = [];
+    rawExcelArray = []; excelHeaders = []; excelData = []; originalExcelFileName = '';
 
-    document.getElementById('csvFileInput').value = "";
-    document.getElementById('excelFileInput').value = "";
-    document.getElementById('csvFileName').textContent = "No file selected";
-    document.getElementById('excelFileName').textContent = "No file selected";
-    document.getElementById('customFilename').value = ""; // ⭐ NEW reset custom filename
-    document.getElementById('iceCheckbox').checked = false; // ⭐ NEW reset ICE mode
+    // reset UI fields (if present)
+    if (el('csvFileInput')) el('csvFileInput').value = '';
+    if (el('excelFileInput')) el('excelFileInput').value = '';
+    if (el('csvFileName')) el('csvFileName').textContent = 'No file selected';
+    if (el('excelFileName')) el('excelFileName').textContent = 'No file selected';
+    if (el('csvPreview')) el('csvPreview').innerHTML = '';
+    if (el('excelPreview')) el('excelPreview').innerHTML = '';
+    if (el('resultPreview')) el('resultPreview').innerHTML = '';
+    if (el('csvInfo')) el('csvInfo').textContent = '';
+    if (el('excelInfo')) el('excelInfo').textContent = '';
+    if (el('resultInfo')) el('resultInfo').textContent = '';
+    if (el('customFilename')) el('customFilename').value = '';
+    if (el('iceCheckbox')) el('iceCheckbox').checked = false;
+    if (el('downloadButton')) el('downloadButton').disabled = true;
+    if (el('csvStudentCol')) el('csvStudentCol').innerHTML = '';
+    if (el('csvMarkCol')) el('csvMarkCol').innerHTML = '';
+    if (el('excelStudentCol')) el('excelStudentCol').innerHTML = '';
+    if (el('excelMarkDestCol')) el('excelMarkDestCol').innerHTML = '';
 
-    ['csvStudentCol', 'csvMarkCol', 'excelStudentCol', 'excelMarkDestCol'].forEach(id => {
-        const select = document.getElementById(id);
-        select.innerHTML = "";
-    });
-
-    ['csvPreview', 'excelPreview', 'resultPreview'].forEach(id => {
-        document.getElementById(id).innerHTML = "";
-    });
-
-    document.getElementById('logOutput').textContent = "";
-    document.getElementById('downloadButton').disabled = true;
-
-    showLog("🔄 Tool reset. Ready for a new transfer.", false);
+    showLog('🔄 Tool reset. Ready for a new transfer.', false);
 });
